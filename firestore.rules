@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Troque aqui se mudar os e-mails em src/lib.js
+    function caixa()   { return request.auth != null && request.auth.token.email == 'caixa@acaiverso.app'; }
+    function preparo() { return request.auth != null && request.auth.token.email == 'preparo@acaiverso.app'; }
+
+    match /menu/{id} {
+      allow read: if true;
+      allow create, delete: if caixa();
+      // O Preparo só pode ativar/inativar (esgotou), não mexe em nome nem preço.
+      allow update: if caixa() || (preparo() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']));
+    }
+    match /config/{id} { allow read: if true; allow write: if caixa(); }
+    match /counters/orders {
+      allow read: if true;
+      allow create: if request.resource.data.n == 1;
+      allow update: if request.resource.data.n == resource.data.n + 1;
+    }
+    match /orders/{id} {
+      allow get: if true;                    // o cliente acompanha o próprio pedido pelo id
+      allow list: if caixa() || preparo();
+      allow create: if request.resource.data.status == 'aguardando'
+                    && request.resource.data.paid == false
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() <= 60;
+      // Caixa: aceita, confirma pagamento ou cancela (só pedidos ainda não pagos).
+      allow update: if (caixa()
+                    && resource.data.status in ['aguardando','pagamento']
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','pay','paid','paidAt'])
+                    && request.resource.data.status in ['aguardando','pagamento','fila','cancelado']
+                    && (request.resource.data.status != 'fila' || request.resource.data.paid == true))
+                 // Preparo: só mexe em pedidos JÁ PAGOS e só no status.
+                 || (preparo()
+                    && resource.data.paid == true
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+                    && request.resource.data.status in ['preparo','finalizado','entregue']);
+      allow delete: if caixa();
+    }
+  }
+}
